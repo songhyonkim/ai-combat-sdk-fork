@@ -61,9 +61,11 @@ def get_tree_path(name: str) -> str:
         str: 행동트리 파일 절대 경로
         
     탐색 순서:
+        0. 직접 경로 (경로 구분자 포함 시: 절대 경로 또는 PROJECT_ROOT 기준 상대 경로)
         1. submissions/{name}/{name}.yaml
-        2. examples/{name}.yaml
-        3. 직접 경로 (절대 경로 또는 PROJECT_ROOT 기준 상대 경로)
+        2. submissions/{name}.yaml
+        3. examples/{name}.yaml
+        4. examples/{name}/{name}.yaml
     """
     # 경로 구분자가 포함된 경우 직접 경로로 처리
     if "/" in name or "\\" in name or Path(name).is_absolute():
@@ -74,10 +76,15 @@ def get_tree_path(name: str) -> str:
             return str(direct_path.resolve())
         raise FileNotFoundError(f"Behavior tree file not found: {name}")
     
-    # 먼저 submissions 폴더 확인
+    # submissions 폴더 확인 (sub-dir: submissions/{name}/{name}.yaml)
     submission_path = PROJECT_ROOT / "submissions" / name / f"{name}.yaml"
     if submission_path.exists():
         return str(submission_path)
+    
+    # submissions 폴더 확인 (flat: submissions/{name}.yaml)
+    submission_flat_path = PROJECT_ROOT / "submissions" / f"{name}.yaml"
+    if submission_flat_path.exists():
+        return str(submission_flat_path)
     
     # examples 폴더 확인 (flat: examples/{name}.yaml)
     example_path = PROJECT_ROOT / "examples" / f"{name}.yaml"

@@ -97,7 +97,7 @@ class MatchCore:
         health1 = self.health1
         health2 = self.health2
 
-        _ = MatchJudge(max_steps=self.max_steps)
+        judge = MatchJudge(max_steps=self.max_steps)
 
         if verbose:
             print("매치 시작:")
@@ -187,6 +187,27 @@ class MatchCore:
                 winner = "tree1"
                 victory_condition = VictoryCondition.HEALTH_ZERO
                 done = True
+
+            if not done:
+                try:
+                    _ego_pos = env.agents[env.ego_ids[0]].get_position()
+                    _enm_pos = env.agents[env.enm_ids[0]].get_position()
+                    _alt1_m = float(_ego_pos[2])
+                    _alt2_m = float(_enm_pos[2])
+                    _j_winner, _j_cond = judge.judge(
+                        health1.current_health, health2.current_health,
+                        _alt1_m, _alt2_m, step_count
+                    )
+                    if _j_winner is not None and _j_cond == VictoryCondition.HARD_DECK_VIOLATION:
+                        winner = "tree1" if _j_winner == "agent1" else "tree2"
+                        victory_condition = _j_cond
+                        done = True
+                        if replay_path:
+                            _viol_uid = env.enm_ids[0] if winner == "tree1" else env.ego_ids[0]
+                            with open(replay_path, 'a') as _rf:
+                                _rf.write(f"0,Event=Bookmark|{_viol_uid}|[Hard Deck] 고도 위반 — {winner} 승리\n")
+                except (AttributeError, KeyError, ValueError, TypeError):
+                    pass
 
             reward1 = 0.0
             reward2 = 0.0
@@ -344,7 +365,8 @@ class MatchCore:
             total_reward_1 += reward1
             total_reward_2 += reward2
             step_count += 1
-            done = dones.any() if isinstance(dones, np.ndarray) else dones
+            if not done:
+                done = dones.any() if isinstance(dones, np.ndarray) else dones
 
             if verbose and step_count % 50 == 0:
                 print(f"  Step {step_count}: reward={reward}")
@@ -387,8 +409,8 @@ class MatchCore:
         _print(f"  승자: {winner_display} [{result.victory_condition}]")
         _print(f"  스텝: {step_count} / {self.max_steps}")
         _print(f"  소요 시간: {duration:.2f}초")
-        _print(f"  {tree1_name}: {health1.current_health:.1f} HP (데미지 {health2.total_damage_dealt:.1f} 가함)")
-        _print(f"  {tree2_name}: {health2.current_health:.1f} HP (데미지 {health1.total_damage_dealt:.1f} 가함)")
+        _print(f"  {tree1_name}: {health1.current_health:.1f} HP")
+        _print(f"  {tree2_name}: {health2.current_health:.1f} HP")
 
         return result
 
