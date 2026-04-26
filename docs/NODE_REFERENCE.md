@@ -384,34 +384,7 @@ tree:
 
 ## 관측값 (Blackboard `observation`)
 
-### 기본 관측값
-
-| 키 | 범위 | 설명 |
-|----|------|------|
-| `distance_ft` | 0 ~ 65617 ft | 적과의 거리 |
-| `ego_altitude_ft` | 0 ~ 49213 ft | 내 고도 |
-| `ego_vc_kts` | 0 ~ 778 kts | 내 속도 |
-| `alt_gap_ft` | ft | 고도 차이 (양수=적이 위) |
-| `ata_deg` | 0 ~ 1 (정규화) | ATA / 180° (0=정면조준) |
-| `aa_deg` | 0 ~ 1 (정규화) | AA / 180° (0=적 후방, 1=정면위협) |
-| `hca_deg` | 0 ~ 1 (정규화) | HCA / 180° |
-| `tau_deg` | -1 ~ 1 (정규화) | TAU / 180° |
-| `relative_bearing_deg` | -1 ~ 1 (정규화) | 상대 방위각 / 180° (양수=오른쪽) |
-| `side_flag` | -1, 0, 1 | 적 방향 (-1=왼쪽, 0=정면, 1=오른쪽) |
-
-### 전술 인사이트 기반 신규 관측값
-
-| 키 | 범위/타입 | 설명 |
-|----|----------|------|
-| `closure_rate_kts` | kts (양수=접근) | 접근 속도 |
-| `turn_rate_degs` | °/s | 선회율 (g·tan(bank)/v 공식) |
-| `in_39_line` | bool | 적이 내 3-9 라인 안 (ATA < 90°) |
-| `overshoot_risk` | bool | 오버슈트 위험 여부 |
-| `tc_type` | `'1-circle'`/`'2-circle'` | 선회 유형 (HCA 기반) |
-| `energy_advantage` | bool | 종합 에너지 우세 (He 기반) |
-| `energy_diff_ft` | ft | 에너지 차이 (양수=아군 우세) |
-| `alt_advantage` | bool | 고도 우세 |
-| `spd_advantage` | bool | 속도 우세 |
+> 📖 **전체 키 목록, 단위 규약(`_ft`/`_kts`/`_deg`), 부호 규약, Breaking Change 안내는 [`BLACKBOARD_REFERENCE.md`](./BLACKBOARD_REFERENCE.md)를 참조하세요.**
 
 ---
 

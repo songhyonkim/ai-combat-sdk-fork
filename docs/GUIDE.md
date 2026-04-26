@@ -945,7 +945,7 @@ class MyAction(BaseAction):
             
             # 관측값 추출
             distance = obs.get("distance_ft", 10000.0)
-            ata_deg = obs.get("ata_deg", 0.5) * 180.0  # 0-1 normalized → degrees
+            ata_deg = obs.get("ata_deg", 90.0)  # 실제 도(°) 단위, 0°~180°
             
             # 로직 구현
             if distance < self.my_param:
@@ -1038,12 +1038,12 @@ class OptimalAttackPosition(py_trees.behaviour.Behaviour):
     def update(self) -> py_trees.common.Status:
         try:
             obs = self.blackboard.observation
-            distance = obs.get("distance", 10000.0)  # meters
-            ata_deg = obs.get("ata_deg", 1.0) * 180.0
-            alt_gap = obs.get("alt_gap", 0.0)
+            distance = obs.get("distance_ft", 10000.0)  # ft
+            ata_deg = obs.get("ata_deg", 180.0)  # 실제 도(°) 단위
+            alt_gap_ft = obs.get("alt_gap_ft", 0.0)  # ft
             
             # 조건 검사
-            if 800 < distance < 2500 and abs(ata_deg) < 30 and alt_gap > 0:
+            if 2625 < distance < 8202 and abs(ata_deg) < 30 and alt_gap_ft > 0:
                 return py_trees.common.Status.SUCCESS
             else:
                 return py_trees.common.Status.FAILURE
@@ -1076,7 +1076,7 @@ class PNAttack(BaseAction):
     def update(self) -> py_trees.common.Status:
         obs = self.blackboard.observation
         
-        tau = obs.get("tau_deg", 0.0) * 180.0  # 0-1 → degrees
+        tau = obs.get("tau_deg", 0.0)  # 실제 도(°) 단위, -180°~180°
         distance = obs.get("distance_ft", 3000.0)
         
         # TAU 변화율 계산 (D항)
@@ -1123,8 +1123,8 @@ class HighEnergyState(py_trees.behaviour.Behaviour):
     
     def update(self) -> py_trees.common.Status:
         obs = self.blackboard.observation
-        velocity = obs.get("ego_vc", 200.0)  # m/s
-        altitude = obs.get("ego_altitude", 5000.0)  # m
+        velocity = obs.get("ego_vc_kts", 389.0)  # kts
+        altitude = obs.get("ego_altitude_ft", 16404.0)  # ft
         
         energy = altitude + (velocity ** 2) / 20
         
@@ -1134,18 +1134,18 @@ class HighEnergyState(py_trees.behaviour.Behaviour):
             return py_trees.common.Status.FAILURE
 ```
 
-### 9.6 단위 변환 주의 (SDK v0.5.3)
+### 9.6 단위 변환 주의
 
 **관측값 단위**:
 - **거리**: `ft` (feet) - `distance_ft`, `alt_gap_ft`
 - **속도**: `kts` (knots) - `ego_vc_kts`, `closure_rate_kts`
-- **각도**: `0-1 normalized` - `ata_deg`, `tau_deg` → **×180**으로 degrees 변환 필요
+- **각도**: `도(°)` - `ata_deg`, `tau_deg` → **변환 없이** 바로 사용
 
 **변환 예시**:
 ```python
-# 각도 변환
-ata_deg = obs.get("ata_deg", 0.5) * 180.0  # 0-1 → 0-180°
-tau_deg = obs.get("tau_deg", 0.0) * 180.0  # 0-1 → 0-180°
+# 각도: 실제 도(°) 단위로 저장됨 (변환 불필요)
+ata_deg = obs.get("ata_deg", 0.0)    # 0°~180°
+tau_deg = obs.get("tau_deg", 0.0)    # -180°~180°
 
 # 거리 변환 (m → ft)
 distance_m = 1000

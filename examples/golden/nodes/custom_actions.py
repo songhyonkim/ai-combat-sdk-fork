@@ -60,10 +60,10 @@ class PNPursuit(BaseAction):
     def __init__(self, name: str = "PNPursuit",
                  kp: float = 1.0,
                  kd: float = 0.4,
-                 close_range: float = 1500.0,
-                 wez_max: float = 914.0,
-                 wez_min: float = 152.0,
-                 far_range: float = 4000.0):
+                 close_range: float = 4921.0,
+                 wez_max: float = 2999.0,
+                 wez_min: float = 499.0,
+                 far_range: float = 13123.0):
         super().__init__(name)
         self.kp = kp
         self.kd = kd
@@ -77,58 +77,57 @@ class PNPursuit(BaseAction):
         try:
             obs = self.blackboard.observation
 
-            tau = obs.get("tau_deg", 0.0) * 180.0
-            ata = obs.get("ata_deg", 1.0) * 180.0
-            distance = obs.get("distance", 10000.0)
-            alt_gap = obs.get("alt_gap", 0.0)
-            altitude = obs.get("ego_altitude", 5000.0)
-            velocity = obs.get("ego_vc", 200.0)
-            closure = obs.get("closure_rate", 0.0)
+            tau = obs.get("tau_deg", 0.0)
+            ata = obs.get("ata_deg", 180.0)
+            distance_ft = obs.get("distance_ft", 32808.0)
+            alt_gap_ft = obs.get("alt_gap_ft", 0.0)
+            altitude_ft = obs.get("ego_altitude_ft", 16404.0)
+            closure_kts = obs.get("closure_rate_kts", 0.0)
 
             # --- HEADING: PD on tau ---
             if self.prev_tau is not None:
                 tau_rate = (tau - self.prev_tau) / 0.2
                 # Increase gains at close range for tighter tracking
-                kp = self.kp * (1.5 if distance < self.close_range else 1.0)
+                kp = self.kp * (1.5 if distance_ft < self.close_range else 1.0)
                 heading_idx = _heading_pd(tau, tau_rate, kp, self.kd)
             else:
                 heading_idx = _heading_from_tau(tau, self.kp)
             self.prev_tau = tau
 
             # --- ALTITUDE: situation-dependent ---
-            if altitude < 800:
+            if altitude_ft < 2625:
                 delta_alt = 4  # Emergency climb (Hard Deck ~305m)
-            elif ata < 30 and distance > self.wez_max:
+            elif ata < 30 and distance_ft > self.wez_max:
                 # Pointing at enemy but far: dive slightly for speed, close fast
-                delta_alt = 1 if altitude > 2000 else 2
+                delta_alt = 1 if altitude_ft > 6562 else 2
             elif ata > 90:
                 # Turning fight (enemy behind): maintain altitude, don't bleed energy climbing
                 delta_alt = 2
-            elif alt_gap > 200:
+            elif alt_gap_ft > 656:
                 delta_alt = 2  # Have altitude advantage: maintain
-            elif alt_gap > -100:
+            elif alt_gap_ft > -328:
                 delta_alt = 2  # Roughly same altitude: maintain (save energy for turns)
             else:
                 delta_alt = 3  # Below enemy: climb to reduce disadvantage
 
             # --- SPEED: ATA-aware ---
-            if distance < self.wez_min:
+            if distance_ft < self.wez_min:
                 delta_vel = 0  # Too close: hard brake
-            elif distance < self.wez_max and ata < 20:
+            elif distance_ft < self.wez_max and ata < 20:
                 delta_vel = 1  # In WEZ + on target: decelerate for stable aim
-            elif ata < 30 and distance > self.close_range:
+            elif ata < 30 and distance_ft > self.close_range:
                 delta_vel = 4  # Pointing at enemy + far: max speed to close!
-            elif ata > 60 and distance < self.close_range:
+            elif ata > 60 and distance_ft < self.close_range:
                 delta_vel = 1  # Turning fight + close: decelerate for tighter turn
-            elif distance < self.close_range:
+            elif distance_ft < self.close_range:
                 delta_vel = 2  # Close: maintain
-            elif distance < self.far_range:
+            elif distance_ft < self.far_range:
                 delta_vel = 3  # Mid: accelerate
             else:
                 delta_vel = 4  # Far: max speed
 
             # Closure rate override: if enemy is opening, push harder
-            if closure < -30 and distance > self.wez_max:
+            if closure_kts < -58 and distance_ft > self.wez_max:
                 delta_vel = max(delta_vel, 4)
 
             self.set_action(delta_alt, heading_idx, delta_vel)
@@ -160,11 +159,10 @@ class PNAttack(BaseAction):
         try:
             obs = self.blackboard.observation
 
-            tau = obs.get("tau_deg", 0.0) * 180.0
-            ata = obs.get("ata_deg", 1.0) * 180.0
-            distance = obs.get("distance", 1000.0)
-            alt_gap = obs.get("alt_gap", 0.0)
-            closure = obs.get("closure_rate", 0.0)
+            tau = obs.get("tau_deg", 0.0)
+            distance_ft = obs.get("distance_ft", 3281.0)
+            alt_gap_ft = obs.get("alt_gap_ft", 0.0)
+            closure_kts = obs.get("closure_rate_kts", 0.0)
 
             # --- HEADING: tight PD ---
             if self.prev_tau is not None:
@@ -175,22 +173,22 @@ class PNAttack(BaseAction):
             self.prev_tau = tau
 
             # --- ALTITUDE: minimal, keep stable ---
-            if alt_gap > 200:
+            if alt_gap_ft > 656:
                 delta_alt = 2  # We're above: maintain
-            elif alt_gap > -100:
+            elif alt_gap_ft > -328:
                 delta_alt = 3  # Slightly below: climb gently
             else:
                 delta_alt = 2  # Don't chase vertically during attack
 
             # --- SPEED: decelerate for stable gun platform ---
-            if distance < 152:
+            if distance_ft < 499:
                 delta_vel = 0  # Too close, hard brake
-            elif distance < 400:
+            elif distance_ft < 1312:
                 # Very close: adjust based on closure
-                delta_vel = 0 if closure > 30 else 1
-            elif distance < 700:
+                delta_vel = 0 if closure_kts > 58 else 1
+            elif distance_ft < 2297:
                 delta_vel = 1  # Optimal WEZ range: decelerate
-            elif distance < 914:
+            elif distance_ft < 2999:
                 delta_vel = 2  # Edge of WEZ: maintain
             else:
                 delta_vel = 3  # Just outside WEZ: close in
@@ -212,8 +210,8 @@ class EnergyRecovery(BaseAction):
     """
 
     def __init__(self, name: str = "EnergyRecovery",
-                 min_velocity: float = 200.0,
-                 critical_velocity: float = 150.0):
+                 min_velocity: float = 389.0,
+                 critical_velocity: float = 292.0):
         super().__init__(name)
         self.min_velocity = min_velocity
         self.critical_velocity = critical_velocity
@@ -222,26 +220,26 @@ class EnergyRecovery(BaseAction):
         try:
             obs = self.blackboard.observation
 
-            tau = obs.get("tau_deg", 0.0) * 180.0
-            velocity = obs.get("ego_vc", 200.0)
-            altitude = obs.get("ego_altitude", 5000.0)
+            tau = obs.get("tau_deg", 0.0)
+            velocity_kts = obs.get("ego_vc_kts", 389.0)
+            altitude_ft = obs.get("ego_altitude_ft", 16404.0)
 
             # Heading: relaxed tracking (save energy, don't hard turn)
             heading_idx = _heading_from_tau(tau, 0.5)
 
             # Altitude/Speed: trade altitude for speed if needed
-            if velocity < self.critical_velocity:
+            if velocity_kts < self.critical_velocity:
                 delta_alt = 1  # Dive to gain speed
                 delta_vel = 4  # Max accelerate
-            elif velocity < self.min_velocity:
-                delta_alt = 1 if altitude > 1500 else 2
+            elif velocity_kts < self.min_velocity:
+                delta_alt = 1 if altitude_ft > 4921 else 2
                 delta_vel = 4  # Accelerate
             else:
                 delta_alt = 2  # Maintain altitude
                 delta_vel = 3  # Accelerate
 
             # Hard Deck safety
-            if altitude < 800:
+            if altitude_ft < 2625:
                 delta_alt = 4
                 delta_vel = 3
 
@@ -259,11 +257,11 @@ class EnergyRecovery(BaseAction):
 # ============================================================
 
 _OBS_KEYS = [
-    'distance', 'ego_altitude', 'ego_vc', 'alt_gap',
+    'distance_ft', 'ego_altitude_ft', 'ego_vc_kts', 'alt_gap_ft',
     'ata_deg', 'aa_deg', 'hca_deg', 'tau_deg',
     'relative_bearing_deg', 'side_flag',
-    'closure_rate', 'turn_rate', 'in_39_line', 'overshoot_risk',
-    'tc_type', 'energy_advantage', 'energy_diff',
+    'closure_rate_kts', 'turn_rate_degs', 'in_39_line', 'overshoot_risk',
+    'tc_type', 'energy_advantage', 'energy_diff_ft',
     'alt_advantage', 'spd_advantage',
 ]
 
@@ -363,17 +361,17 @@ class AdaptiveAction(BaseAction):
         try:
             obs = self.blackboard.observation
 
-            aa       = obs.get('aa_deg', 0.5) * 180   # 0=opp rear(offense), 180=opp front(defense)
-            ata      = obs.get('ata_deg', 0.5) * 180   # 0=pointing at opp
-            tau      = obs.get('tau_deg', 0.0) * 180   # heading correction to opp
-            distance = obs.get('distance', 5000.0)
-            tc_type  = obs.get('tc_type', '2-circle')
-            overshoot = obs.get('overshoot_risk', False)
-            side_flag = int(obs.get('side_flag', 0))
-            alt_gap   = obs.get('alt_gap', 0.0)        # positive = opp above
-            ego_alt   = obs.get('ego_altitude', 5000.0)
-            closure   = obs.get('closure_rate', 0.0)
-            energy_diff = obs.get('energy_diff', 0.0)
+            aa          = obs.get('aa_deg', 90.0)
+            ata         = obs.get('ata_deg', 90.0)
+            tau         = obs.get('tau_deg', 0.0)
+            distance_ft = obs.get('distance_ft', 16404.0)
+            tc_type     = obs.get('tc_type', '2-circle')
+            overshoot   = obs.get('overshoot_risk', False)
+            side_flag   = int(obs.get('side_flag', 0))
+            alt_gap_ft  = obs.get('alt_gap_ft', 0.0)
+            ego_alt_ft  = obs.get('ego_altitude_ft', 16404.0)
+            closure_kts = obs.get('closure_rate_kts', 0.0)
+            energy_diff_ft = obs.get('energy_diff_ft', 0.0)
 
             # Derivative for PD heading control
             if self._prev_tau is not None:
@@ -386,27 +384,27 @@ class AdaptiveAction(BaseAction):
 
             if aa < 60 and ata < 70:
                 # OFFENSIVE: we have rear-aspect position
-                da, dh, dv = self._offensive(tau, tau_rate, alt_gap, distance, ata)
+                da, dh, dv = self._offensive(tau, tau_rate, alt_gap_ft, distance_ft, ata)
 
             elif aa > 140:
                 # DEFENSIVE: opponent has our 6 o'clock
-                da, dh, dv = self._defensive(side_flag, ego_alt)
+                da, dh, dv = self._defensive(side_flag, ego_alt_ft)
 
             elif overshoot:
                 # OVERSHOOT RISK: too fast, about to pass opponent
                 da, dh, dv = self._high_yoyo(tau, side_flag)
 
-            elif distance < 3000:
+            elif distance_ft < 9843:
                 if tc_type == '1-circle':
                     # 1-circle: tight turn to cut inside
                     da, dh, dv = self._one_circle(tau, tau_rate)
                 else:
                     # 2-circle: energy fight, wider arc
-                    da, dh, dv = self._two_circle(tau, energy_diff, alt_gap)
+                    da, dh, dv = self._two_circle(tau, energy_diff_ft, alt_gap_ft)
 
             else:
                 # DEFAULT: lag pursuit — energy-efficient, set up WEZ
-                da, dh, dv = self._lag_pursuit(tau, tau_rate, alt_gap, distance, closure, ego_alt)
+                da, dh, dv = self._lag_pursuit(tau, tau_rate, alt_gap_ft, distance_ft, closure_kts, ego_alt_ft)
 
             self.set_action(da, dh, dv)
             return py_trees.common.Status.SUCCESS
@@ -418,31 +416,31 @@ class AdaptiveAction(BaseAction):
 
     # ── Sub-maneuver implementations ──
 
-    def _offensive(self, tau, tau_rate, alt_gap, distance, ata):
+    def _offensive(self, tau, tau_rate, alt_gap_ft, distance_ft, ata):
         """We have rear-aspect advantage: lead pursuit to cut corners."""
         # Lead heading (gain > 1 → head toward where opp will be)
-        kp = 1.3 if distance > 2000 else 1.1
+        kp = 1.3 if distance_ft > 6562 else 1.1
         dh = _heading_pd(tau, tau_rate, kp=kp, kd=0.2)
 
         # Altitude: climb toward opp if they're above, maintain if we're above
-        if alt_gap > 150:
+        if alt_gap_ft > 492:
             da = 3
-        elif alt_gap < -150:
+        elif alt_gap_ft < -492:
             da = 2
         else:
             da = 2
 
         # Speed: moderate to avoid overshoot
-        if ata < 20 and distance < 1500:
+        if ata < 20 and distance_ft < 4921:
             dv = 2   # about to be in WEZ: stable platform
-        elif distance > 3000:
+        elif distance_ft > 9843:
             dv = 4   # far: close fast
         else:
             dv = 3
 
         return da, dh, dv
 
-    def _defensive(self, side_flag, ego_alt):
+    def _defensive(self, side_flag, ego_alt_ft):
         """Opponent has rear-aspect: hard break turn."""
         # Hard turn OPPOSITE to opponent's side
         if side_flag == 1:      # opp on our right → hard left
@@ -452,7 +450,7 @@ class AdaptiveAction(BaseAction):
         else:
             dh = 0  # default hard left
 
-        da = 1 if ego_alt > 1000 else 2  # slight descent for speed
+        da = 1 if ego_alt_ft > 3281 else 2  # slight descent for speed
         dv = 4  # max speed
 
         return da, dh, dv
@@ -471,14 +469,14 @@ class AdaptiveAction(BaseAction):
         dv = 1   # decelerate → tighter turn radius
         return da, dh, dv
 
-    def _two_circle(self, tau, energy_diff, alt_gap):
+    def _two_circle(self, tau, energy_diff_ft, alt_gap_ft):
         """2-circle turn fight: energy fight, wider arc."""
         dh = _heading_from_tau(tau, gain=0.9)  # softer turn
 
         # Climb if we have energy advantage (altitude trade-off)
-        if energy_diff > 500:
+        if energy_diff_ft > 500:
             da = 3
-        elif alt_gap < -200:
+        elif alt_gap_ft < -656:
             da = 2  # we're above: maintain
         else:
             da = 2
@@ -486,26 +484,26 @@ class AdaptiveAction(BaseAction):
         dv = 3  # maintain speed (energy fight)
         return da, dh, dv
 
-    def _lag_pursuit(self, tau, tau_rate, alt_gap, distance, closure, ego_alt):
+    def _lag_pursuit(self, tau, tau_rate, alt_gap_ft, distance_ft, closure_kts, ego_alt_ft):
         """Default lag pursuit: energy-efficient, follow from behind."""
         dh = _heading_pd(tau, tau_rate, kp=0.8, kd=0.3)
 
         # Altitude management
-        if ego_alt < 800:
+        if ego_alt_ft < 2625:
             da = 4  # emergency climb
-        elif alt_gap > 200:
+        elif alt_gap_ft > 656:
             da = 3  # climb to match opp
-        elif alt_gap < -200:
+        elif alt_gap_ft < -656:
             da = 2  # maintain our altitude advantage
         else:
             da = 2
 
         # Speed: close when far, moderate when near
-        if distance > 4000:
+        if distance_ft > 13123:
             dv = 4
-        elif distance > 2000:
+        elif distance_ft > 6562:
             dv = 3
-        elif closure < -20:  # distance opening
+        elif closure_kts < -39:  # distance opening
             dv = 4
         else:
             dv = 2

@@ -19,7 +19,7 @@ def create_full_logger(log_file: str = None):
     if log_file:
         Path(log_file).parent.mkdir(parents=True, exist_ok=True)
         with open(log_file, 'w', encoding='utf-8') as f:
-            f.write("step,agent_id,bfm_situation,ego_health,enm_health,ego_damage_dealt,enm_damage_dealt,in_wez,enm_in_wez,reward,distance,ata_deg,action_altitude,action_heading,action_velocity,aileron,elevator,rudder,throttle,active_node,active_nodes_count\n")
+            f.write("step,agent_id,bfm_situation,ego_health,enm_health,ego_damage_dealt,enm_damage_dealt,in_wez,enm_in_wez,reward,distance_ft,ata_deg,action_altitude,action_heading,action_velocity,aileron,elevator,rudder,throttle,active_node,active_nodes_count\n")
     
     def full_logger(step, agent_id, obs, action, low_level_action, reward, health, active_nodes, bfm_situation):
         """매 틱마다 모든 정보를 로깅"""
@@ -28,8 +28,8 @@ def create_full_logger(log_file: str = None):
             bfm_str = str(bfm_situation) if bfm_situation else ""
             
             # 관측값에서 주요 정보 추출
-            distance = obs.get("distance", 0)
-            ata_deg = obs.get("ata_deg", 0) * 180  # 정규화된 값을 각도로 변환
+            distance_ft = obs.get("distance_ft", 0)
+            ata_deg = obs.get("ata_deg", 0.0)
             
             # 활성 노드 정보 요약
             active_node = ""
@@ -43,7 +43,7 @@ def create_full_logger(log_file: str = None):
                   f"HP={health['ego']:5.1f}/{health['enm']:5.1f} | "
                   f"Dmg={obs.get('ego_damage_dealt',0):4.1f} | "
                   f"WEZ={obs.get('in_wez',False)} | "
-                  f"Dist={distance:4.0f}m ATA={ata_deg:5.1f}deg | "
+                  f"Dist={distance_ft:4.0f}ft ATA={ata_deg:5.1f}deg | "
                   f"Act={action} | "
                   f"Node={active_node}")
             
@@ -54,7 +54,7 @@ def create_full_logger(log_file: str = None):
                            f"{health['ego']},{health['enm']},"
                            f"{obs.get('ego_damage_dealt',0)},{obs.get('enm_damage_dealt',0)},"
                            f"{obs.get('in_wez',False)},{obs.get('enm_in_wez',False)},"
-                           f"{reward:.6f},{distance:.1f},{ata_deg:.2f},"
+                           f"{reward:.6f},{distance_ft:.1f},{ata_deg:.2f},"
                            f"{action[0]},{action[1]},{action[2]},"
                            f"{low_level_action.get('aileron',0):.4f},"
                            f"{low_level_action.get('elevator',0):.4f},"
