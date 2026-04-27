@@ -170,16 +170,20 @@ class MatchCore:
                 health1.take_damage(damage1, step_count)
                 health2.deal_damage(damage1)
                 if replay_path:
-                    with open(replay_path, "a") as f:
+                    with open(replay_path, "a", encoding='utf-8-sig') as f:
                         f.write(f"0,Event=Bookmark|{env.enm_ids[0]}|[Red] HIT! {damage1:.2f} HP\n")
             if damage2 > 0:
                 health2.take_damage(damage2, step_count)
                 health1.deal_damage(damage2)
                 if replay_path:
-                    with open(replay_path, "a") as f:
+                    with open(replay_path, "a", encoding='utf-8-sig') as f:
                         f.write(f"0,Event=Bookmark|{env.ego_ids[0]}|[Blue] HIT! {damage2:.2f} HP\n")
 
-            if not health1.is_alive():
+            if not health1.is_alive() and not health2.is_alive():
+                winner = "draw"
+                victory_condition = VictoryCondition.TIMEOUT
+                done = True
+            elif not health1.is_alive():
                 winner = "tree2"
                 victory_condition = VictoryCondition.HEALTH_ZERO
                 done = True
@@ -275,7 +279,7 @@ class MatchCore:
                 env.render(mode="txt", filepath=str(replay_path))
                 try:
                     with open(replay_path, 'a', encoding='utf-8-sig') as f:
-                        for i, agent_id in enumerate(env.agents.keys()):
+                        for i, agent_id in enumerate([env.ego_ids[0], env.enm_ids[0]]):
                             agent = env.agents[agent_id]
                             enemy = agent.enemies[0] if agent.enemies else None
                             if enemy is None:
