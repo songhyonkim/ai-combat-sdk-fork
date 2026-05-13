@@ -33,25 +33,24 @@ class BehaviorTreeMatch:
     # CSV 컬럼 순서 정의 (에이전트별로 반복)
     _CSV_COLUMNS = [
         "step",
+        "sim_time_sec",       # 실제 시뮬레이션 시간 (초) — ACMI 타임스탬프와 동일
         "agent_id",
         "tree_name",
-        # --- 위치/자세 ---
+        # --- 위치/자세 (ACMI T필드 + HDG) ---
         "ego_altitude_ft",
-        "ego_vc_kts",
-        "ego_vx_kts",
-        "ego_vy_kts",
-        "ego_vz_kts",
+        "ego_vc_kts",         # CAS (계기속도) — ACMI CAS 필드와 동일 속도
+        "heading_deg",        # ACMI HDG 필드
         "roll_deg",
         "pitch_deg",
+        # --- 에너지 ---
         "specific_energy_ft",
         "ps_fts",
-        # --- 교전 기하학 ---
+        # --- 교전 기하학 (ACMI Distance/ATA/AA/HCA/TAU/ClosureRate) ---
         "distance_ft",
         "ata_deg",
         "aa_deg",
         "hca_deg",
         "tau_deg",
-        "relative_bearing_deg",
         "alt_gap_ft",
         "closure_rate_kts",
         "turn_rate_degs",
@@ -61,33 +60,32 @@ class BehaviorTreeMatch:
         "ata_lead_deg",
         "tau_lead_deg",
         "side_flag",
-        "energy_advantage",
         "energy_diff_ft",
-        "alt_advantage",
-        "spd_advantage",
         # --- BFM 분류 ---
         "bfm_situation",
-        # --- 체력/데미지 ---
+        # --- 체력/데미지 (ACMI Health/InWEZ) ---
         "ego_health",
         "enm_health",
         "ego_damage_dealt",
         "enm_damage_dealt",
-        "ego_damage_received",
-        "enm_damage_received",
         "in_wez",
         "enm_in_wez",
-        # --- 보상 ---
+        # --- 보상 (ACMI Reward) ---
         "reward",
-        # --- 액션 ---
+        # [BT] 고수준 액션 (이산 인덱스)
         "action_altitude",
         "action_heading",
         "action_velocity",
-        # --- 저수준 제어 ---
+        # [RNN] 저수준 제어 명령 (ACMI RollControlInput 등)
         "aileron",
         "elevator",
         "rudder",
         "throttle",
-        # --- 노드 활성화 ---
+        # [JSBSim] 실제 서보 위치 (ACMI RollControlPosition 등)
+        "servo_aileron",
+        "servo_elevator",
+        "servo_rudder",
+        # --- 노드 활성화 (ACMI ActiveNode/NodePath) ---
         "active_node",
         "active_nodes_path",
     ]
@@ -97,7 +95,7 @@ class BehaviorTreeMatch:
         tree1_file: str,
         tree2_file: str,
         config_name: str = "1v1/NoWeapon/bt_vs_bt",
-        max_steps: int = 1000,
+        max_steps: int = 0,
         tree1_name: Optional[str] = None,
         tree2_name: Optional[str] = None,
         step_callback: Optional[Callable] = None,
@@ -179,15 +177,24 @@ class BehaviorTreeMatch:
 
                 if _csv_writer is not None:
                     try:
+                        # [JSBSim] 실제 서보 위치 읽기 (ACMI RollControlPosition 등)
+                        try:
+                            from src.simulation.envs.JSBSim.core.catalog import JsbsimCatalog as _prp
+                            _agent = env.agents[agent_id_i]
+                            _srv_ail = float(_agent.get_property_value(_prp.fcs_left_aileron_pos_norm) or 0.0)
+                            _srv_ele = float(_agent.get_property_value(_prp.fcs_elevator_pos_norm) or 0.0)
+                            _srv_rud = float(_agent.get_property_value(_prp.fcs_rudder_pos_norm) or 0.0)
+                        except Exception:
+                            _srv_ail = _srv_ele = _srv_rud = 0.0
+
                         row = {
-                            "step": step,
+                            "step": step + 1,
+                            "sim_time_sec": round((step + 1) * float(env.time_interval), 3),
                             "agent_id": agent_id_i,
                             "tree_name": tree_name_i,
                             "ego_altitude_ft": obs_i.get("ego_altitude_ft", ""),
                             "ego_vc_kts": obs_i.get("ego_vc_kts", ""),
-                            "ego_vx_kts": obs_i.get("ego_vx_kts", ""),
-                            "ego_vy_kts": obs_i.get("ego_vy_kts", ""),
-                            "ego_vz_kts": obs_i.get("ego_vz_kts", ""),
+                            "heading_deg": obs_i.get("heading_deg", ""),
                             "roll_deg": obs_i.get("roll_deg", ""),
                             "pitch_deg": obs_i.get("pitch_deg", ""),
                             "specific_energy_ft": obs_i.get("specific_energy_ft", ""),
@@ -197,7 +204,6 @@ class BehaviorTreeMatch:
                             "aa_deg": obs_i.get("aa_deg", ""),
                             "hca_deg": obs_i.get("hca_deg", ""),
                             "tau_deg": obs_i.get("tau_deg", ""),
-                            "relative_bearing_deg": obs_i.get("relative_bearing_deg", ""),
                             "alt_gap_ft": obs_i.get("alt_gap_ft", ""),
                             "closure_rate_kts": obs_i.get("closure_rate_kts", ""),
                             "turn_rate_degs": obs_i.get("turn_rate_degs", ""),
@@ -207,17 +213,12 @@ class BehaviorTreeMatch:
                             "ata_lead_deg": obs_i.get("ata_lead_deg", ""),
                             "tau_lead_deg": obs_i.get("tau_lead_deg", ""),
                             "side_flag": obs_i.get("side_flag", ""),
-                            "energy_advantage": obs_i.get("energy_advantage", ""),
                             "energy_diff_ft": obs_i.get("energy_diff_ft", ""),
-                            "alt_advantage": obs_i.get("alt_advantage", ""),
-                            "spd_advantage": obs_i.get("spd_advantage", ""),
                             "bfm_situation": bfm_i,
                             "ego_health": h_self.current_health,
                             "enm_health": h_enm.current_health,
                             "ego_damage_dealt": h_self.total_damage_dealt,
                             "enm_damage_dealt": h_enm.total_damage_dealt,
-                            "ego_damage_received": h_enm.total_damage_dealt,
-                            "enm_damage_received": h_self.total_damage_dealt,
                             "in_wez": debug_info.get('in_wez1' if i == 0 else 'in_wez2', False) if debug_info and 'in_wez1' in debug_info else False,
                             "enm_in_wez": debug_info.get('in_wez2' if i == 0 else 'in_wez1', False) if debug_info and 'in_wez1' in debug_info else False,
                             "reward": reward_i,
@@ -228,6 +229,9 @@ class BehaviorTreeMatch:
                             "elevator": ll_act.get("elevator", ""),
                             "rudder": ll_act.get("rudder", ""),
                             "throttle": ll_act.get("throttle", ""),
+                            "servo_aileron": _srv_ail,
+                            "servo_elevator": _srv_ele,
+                            "servo_rudder": _srv_rud,
                             "active_node": active_node_name,
                             "active_nodes_path": active_nodes_path,
                         }

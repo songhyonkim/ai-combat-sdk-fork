@@ -86,6 +86,11 @@ class MatchCore:
     ) -> MatchResult:
         """매치 실행"""
         start_time = datetime.now(KST)
+        # ACMI ReferenceTime: 오늘 날짜 UTC 12:00:00 고정
+        # Tacview에서 #0.0 = 12:00:00.000 → 경과시간 = 표시시간 - 12:00:00
+        _today_utc = datetime.now(timezone.utc).date()
+        _acmi_ref = datetime(_today_utc.year, _today_utc.month, _today_utc.day,
+                             12, 0, 0, tzinfo=timezone.utc)
 
         env = SingleCombatEnv(self.config_name)
         tree1_name = self.tree1_name
@@ -94,6 +99,11 @@ class MatchCore:
         env.tree1_name = tree1_name
         env.tree2_name = tree2_name
 
+        # max_steps=0이면 5분(300초)을 env.time_interval로 나눠 동적 계산.
+        # Hz 변경에 무관하게 항상 동일한 실제 경기 시간을 보장.
+        _MAX_DURATION_SEC = 300.0
+        if self.max_steps <= 0:
+            self.max_steps = max(1, int(round(_MAX_DURATION_SEC / float(env.time_interval))))
         env.config.max_steps = self.max_steps
         self.task1 = BehaviorTreeTask(env.config, tree_file=self.tree1_file)
         self.task2 = BehaviorTreeTask(env.config, tree_file=self.tree2_file)
@@ -137,7 +147,7 @@ class MatchCore:
                 f.write("FileVersion=2.2\n")
                 f.write("0,Author=AI-Combat Platform\n")
                 f.write(f"0,Title=Behavior Tree Match: {tree1_name} vs {tree2_name}\n")
-                f.write(f"0,ReferenceTime={start_time.strftime('%Y-%m-%dT%H:%M:%SZ')}\n")
+                f.write(f"0,ReferenceTime={_acmi_ref.strftime('%Y-%m-%dT%H:%M:%SZ')}\n")
                 f.write(f"0,Comments=Tree1={tree1_name}, Tree2={tree2_name}\n")
                 f.write("0,Category=AI Dogfight\n")
                 f.write("#0.0\n")
@@ -175,6 +185,20 @@ class MatchCore:
 
             action = np.array([action1, action2])
             obs, reward, dones, info = env.step(action)
+
+            # env.task._lowlevel_action_cache → task1/task2 동기화
+            # env.step은 env.task.normalize_action만 호출하므로
+            # 별도 BehaviorTreeTask 객체의 _last_low_level_action은 자동 갱신되지 않음.
+            _ll_cache = getattr(env.task, '_lowlevel_action_cache', {})
+            for _tsk, _aid in [(task1, env.ego_ids[0]), (task2, env.enm_ids[0])]:
+                if _aid in _ll_cache:
+                    _na = _ll_cache[_aid]
+                    _tsk._last_low_level_action = {
+                        "aileron": float(_na[0]),
+                        "elevator": float(_na[1]),
+                        "rudder": float(_na[2]),
+                        "throttle": float(_na[3]),
+                    }
 
             # 20 Hz condition subtick: blackboard 갱신(/Distance_ft, PS, BFM 등) +
             # BaseCondition.update() 호출. 액션 노드와 TimedAction 카운터는 영향 없음.
@@ -346,7 +370,7 @@ class MatchCore:
                 try:
                     _frame = build_full_frame(
                         env=env,
-                        sim_time=step_count * env.time_interval,
+                        sim_time=(step_count + 1) * env.time_interval,
                         control_inputs=control_inputs,
                         wez_debug=self._last_wez_debug,
                         health_map=_health_map,

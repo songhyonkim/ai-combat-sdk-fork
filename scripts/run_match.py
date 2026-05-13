@@ -34,7 +34,7 @@ def load_config():
             'default': {
                 'rounds': 1,
                 'scenario': 'bt_vs_bt',
-                'max_steps': 1500,
+                'max_steps': 0,  # 0 = 자동(5분, runner_core에서 Hz 기반 동적 계산)
                 'verbose': True
             },
             'scenarios': ['bt_vs_bt', 'tail_chase'],
@@ -300,8 +300,8 @@ def main():
     parser.add_argument('--scenario', type=str, default=default_config.get('scenario', 'bt_vs_bt'), 
                         choices=scenarios, 
                         help=f'시나리오 (기본값: {default_config.get("scenario", "bt_vs_bt")})')
-    parser.add_argument('--max-steps', type=int, default=default_config.get('max_steps', 1500), 
-                        help=f'최대 스텝 수 (기본값: {default_config.get("max_steps", 1500)})')
+    parser.add_argument('--max-steps', type=int, default=default_config.get('max_steps', 0), 
+                        help='최대 스텝 수 (기본값: 0 = 자동, 5분을 현재 Hz로 환산)')
     parser.add_argument('--quiet', action='store_true', help='상세 출력 비활성화')
     parser.add_argument('--log-csv', type=str, nargs='?', const='logs', default=None,
                         help='CSV 로그 저장 폴더 (기본값: logs) - 파일명은 자동 생성')
