@@ -4,7 +4,7 @@
 # - Pursue: 더 넓은 근거리 판정, 빠른 회전 반응
 # - DefensiveManeuver: 더 일찍 급회피
 # 
-# 상세 파라미터 정보: sdk/docs/PARAMETER_REFERENCE.md
+# 상세 파라미터 정보: docs/NODE_REFERENCE.md
 
 name: "aggressive"
 version: "1.0.0"

@@ -11,6 +11,14 @@ import sys
 from pathlib import Path
 import yaml
 
+# Windows PowerShell 기본 코드페이지(cp949)에서도 한글/이모지가 깨지지 않도록 처리
+try:
+    if sys.platform == "win32":
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+except (AttributeError, LookupError):
+    pass
+
 # 프로젝트 루트를 path에 추가
 # SDK 배포판(tools/): parent.parent = SDK 루트
 # 개발 환경(sdk/tools/): parent.parent = sdk/, parent.parent.parent = 프로젝트 루트

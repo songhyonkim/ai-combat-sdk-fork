@@ -2,7 +2,7 @@
 
 **AI 전투기 대결 챌린지 - 참여자 개발 키트**
 
-> 📦 **SDK 버전**: `v0.10.2`
+> 📦 **SDK 버전**: `v0.10.4`
 
 행동트리(Behavior Tree) 기반으로 AI 전투기를 설계하고, 다른 참여자의 AI와 대결하세요!
 
@@ -49,6 +49,13 @@ pip install -r requirements.txt
 `File → Open Folder → ai-combat-sdk 선택`
 
 터미널을 열면 `(.venv)` 가 자동으로 표시됩니다.
+
+> 💡 **Windows 콘솔 한글 깨짐 해결** — PowerShell 기본 코드페이지가 cp949 이라 매치 출력의 한글이 깨질 수 있습니다. 가상환경 활성화 후 한 번만 다음을 실행하세요:
+> ```powershell
+> $env:PYTHONIOENCODING = "utf-8"
+> chcp 65001 > $null
+> ```
+> 영구 적용하려면 `$PROFILE` 에 두 줄을 추가하세요.
 
 ---
 
@@ -99,6 +106,8 @@ tau = obs.get("tau_deg", 0.0)   # -180°~180°
 | `energy_diff` | `energy_diff_ft` | ft |
 
 > 📖 **전체 키 목록 및 단위 규약**: [docs/BLACKBOARD_REFERENCE.md](docs/BLACKBOARD_REFERENCE.md)
+
+> 📜 **버전 간 변경사항 전체 이력**은 저장소 루트의 `CHANGELOG_*.md` 파일을 참조하세요 (예: `CHANGELOG_v0.10.3_to_v0.10.4.md`).
 
 ---
 

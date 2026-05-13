@@ -17,6 +17,15 @@ if sys.version_info[:2] != (3, 14):
     print("   pip install -r requirements.txt")
     sys.exit(1)
 
+# Windows PowerShell 기본 코드페이지(cp949)에서도 한글이 깨지지 않도록 stdout/stderr 를
+# UTF-8 로 재설정한다. 사용자가 PYTHONIOENCODING 을 직접 지정한 경우 그 값을 따른다.
+try:
+    if sys.platform == "win32":
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+except (AttributeError, LookupError):
+    pass
+
 import argparse
 import yaml
 import time

@@ -4,7 +4,7 @@
 # - DefensiveManeuver: 더 민감한 위협 감지
 # - AltitudeAdvantage: 더 높은 고도 우위
 #
-# 상세 파라미터 정보: sdk/docs/PARAMETER_REFERENCE.md
+# 상세 파라미터 정보: docs/NODE_REFERENCE.md
 
 name: "defensive"
 version: "1.0.0"

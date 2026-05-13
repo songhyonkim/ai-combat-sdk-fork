@@ -22,14 +22,16 @@
 
 ### 1. Python 가상환경 생성 및 활성화
 
+> ⚠️ **반드시 Python 3.14로 venv를 생성하세요.** SDK 내부의 `.pyd` 바이너리는 `cp314` 전용이라 다른 Python 버전에서는 `ImportError`가 발생합니다.
+
 VSCode 터미널(`Ctrl + `` `)에서:
 
 ```powershell
-python -m venv .venv
+py -3.14 -m venv .venv
 .venv\Scripts\activate
 ```
 
-터미널 앞에 `(.venv)` 가 표시되면 정상입니다.
+터미널 앞에 `(.venv)` 가 표시되고 `python --version` 이 `Python 3.14.x` 를 출력하면 정상입니다.
 
 ### 2. 패키지 설치
 

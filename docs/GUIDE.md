@@ -43,7 +43,7 @@ F-16 전투기 2대가 공중에서 1대1로 싸우는 시뮬레이션에서, **
 조건 1: 거리 500 ~ 3000 ft 이내
 조건 2: ATA(Antenna Train Angle) < 12°  (= 기수 앞 ±12° 이내)
 
-→ 두 조건 모두 충족 시 최대 25 HP/s × 거리계수 × 각도계수 × 0.2s (스텝당)
+→ 두 조건 모두 충족 시 최대 25 HP/s × 거리계수 × 각도계수 × 0.05s (시뮬 스텝당, 20Hz)
 ```
 
 > 📌 **WEZ 진입**: ATA < 12° 시 WEZ 활성화, ATA가 0°에 가깝을수록 각도계수 증가로 데미지 최대화. (`WEZ_MAX_ANGLE_DEG = 12.0` in `src/utils/units.py`)
@@ -63,7 +63,7 @@ F-16 전투기 2대가 공중에서 1대1로 싸우는 시뮬레이션에서, **
 
 ### 2.1 BT란?
 
-행동 트리는 에이전트의 의사결정을 **트리 구조**로 표현하는 방법입니다. 매 스텝(0.2초)마다 루트부터 순회하며, 현재 상황에 맞는 행동을 선택합니다.
+행동 트리는 에이전트의 의사결정을 **트리 구조**로 표현하는 방법입니다. **BT의 action 선택 tick은 10Hz (0.1초 주기, 시뮬 2스텝마다 1회)** 로 루트부터 순회하며, 현재 상황에 맞는 행동을 선택합니다. condition 노드의 `update()`는 별도로 매 시뮬 스텝(20Hz, 0.05초)마다 호출되어 짧은 이벤트를 놓치지 않습니다.
 
 ### 2.2 핵심 노드 3가지
 
@@ -105,12 +105,12 @@ tree:
     - 분기3: 추적            # 평상시 → 적 추적
 ```
 
-**매 스텝 동작 흐름**:
-1. 분기1 조건 확인 → 고도 위험? → YES → 상승 (이번 스텝 끝)
+**매 tick(0.1초) 동작 흐름**:
+1. 분기1 조건 확인 → 고도 위험? → YES → 상승 (이번 tick 끝)
 2. 분기1 조건 확인 → 고도 안전? → NO → 분기2로 이동
-3. 분기2 조건 확인 → WEZ 충족? → YES → 사격 (이번 스텝 끝)
+3. 분기2 조건 확인 → WEZ 충족? → YES → 사격 (이번 tick 끝)
 4. 분기2 조건 확인 → WEZ 불충족? → NO → 분기3으로 이동
-5. 분기3: 기본 추적 실행 (이번 스텝 끝)
+5. 분기3: 기본 추적 실행 (이번 tick 끝)
 
 ---
 
@@ -133,7 +133,7 @@ ai-combat-sdk/
 │
 ├── tools/
 │   ├── validate_agent.py             # 에이전트 검증 도구
-│   └── bt_optimizer.py               # 파라미터 자동 최적화
+│   └── test_agent.py                 # 로컬 테스트 도구
 │
 ├── examples/                         # 내장 상대 에이전트 (6종)
 │   ├── simple.yaml                   # 초보 (Pursue만 사용)
@@ -151,12 +151,17 @@ ai-combat-sdk/
 │           └── custom_actions.py     # (선택) 커스텀 액션 노드
 │
 ├── config/
-│   ├── match_config.yaml             # 매치 설정 (1500스텝, bt_vs_bt)
+│   ├── match_config.yaml             # 매치 설정 (자동 6000스텝 = 5분 @ 20Hz, bt_vs_bt)
+│   ├── match_rules.yaml              # 매치 규칙 (Hard Deck, HP 등)
+│   ├── tournament_config.yaml        # 토너먼트 설정
 │   └── wez_params.yaml               # WEZ 규칙 (ATA<12°, 500~3000ft)
 │
 ├── replays/                          # 매치 리플레이 (.acmi)
 └── docs/
-    └── NODE_REFERENCE.md             # 노드 & 파라미터 레퍼런스
+    ├── GUIDE.md                      # (본 문서) 튜토리얼 · 전략 가이드
+    ├── NODE_REFERENCE.md             # 노드 & 파라미터 레퍼런스
+    ├── BLACKBOARD_REFERENCE.md       # 관측값 키 레퍼런스 (단위·부호)
+    └── VSCODE_SETUP.md               # VSCode/Windsurf 환경 설정
 ```
 
 ### 3.2 참가자가 작성하는 파일
@@ -555,18 +560,18 @@ my_agent vs simple
   Tree 1: my_agent.yaml -> ego_id=A0100
   Tree 2: simple.yaml -> enm_id=B0100
   Config: 1v1/NoWeapon/bt_vs_bt
-  Max steps: 1500
+  Max steps: 6000
   Health: 100.0 HP each
 
   ... (스텝별 로그) ...
 
 매치 완료:
   승자: my_agent [health_adv]     ← 내가 이겼다!
-  스텝: 1500 / 1500
+  스텝: 6000 / 6000
   소요 시간: 5.80초
   my_agent: 100.0 HP              ← 내 남은 체력
   simple: 84.1 HP                 ← 상대 남은 체력
-  리플레이: 20260305_my_agent_vs_simple.acmi
+  리플레이: 20260305_143022_my_agent_vs_simple.acmi
 
 ======================================================================
 🎉 매치 완료!
@@ -1089,7 +1094,7 @@ class PNAttack(BaseAction):
         
         # TAU 변화율 계산 (D항)
         if self.prev_tau is not None:
-            tau_rate = (tau - self.prev_tau) / 0.2  # dt=0.2s
+            tau_rate = (tau - self.prev_tau) / 0.1  # dt=0.1s (BT tick 주기, 10Hz)
             heading_idx = _heading_pd(tau, tau_rate, self.kp, self.kd)
         else:
             heading_idx = int(round(tau * self.kp / 22.5)) + 4
@@ -1215,181 +1220,7 @@ submissions/my_agent/
 
 ## 10. 개발 도구 활용
 
-### 10.1 자동 최적화 도구 (bt_optimizer.py)
-
-수작업으로 파라미터를 조정하는 대신, **자동 최적화**를 사용하여 최적의 BT를 찾을 수 있습니다.
-
-#### 기본 사용법
-
-```bash
-# 빠른 탐색 (50개 후보, 약 30분)
-python tools/bt_optimizer.py --candidates 50 --workers 10
-
-# 전체 최적화 (200개 후보, 약 2시간)
-python tools/bt_optimizer.py --candidates 200 --workers 20
-
-# 결과 검증 (상위 후보를 10라운드씩 재테스트)
-python tools/bt_optimizer.py --validate --rounds 10
-
-# Round-robin 토너먼트 (상위 후보들끼리 대결)
-python tools/bt_optimizer.py --roundrobin --rounds 5
-
-# 백테스트 (최고 후보 vs 기존 베스트 20라운드 대결)
-python tools/bt_optimizer.py --backtest --rounds 20
-```
-
-#### 동작 방식 상세
-
-`bt_optimizer.py`는 **3단계 계층적 탐색**으로 최적의 파라미터 조합을 찾습니다:
-
-**Stage 1: LHS 광역 탐색** (약 30분)
-```
-목적: 파라미터 공간을 균등하게 탐색
-방법: Latin Hypercube Sampling (LHS)
-  - 200개 후보 생성 (각 파라미터 차원을 균등 분할)
-  - 6개 상대와 2라운드씩 대전 (2,400 매치)
-  - 병렬 처리 (20 workers)
-결과: 상위 10개 선별
-```
-
-**Stage 2: Hill Climbing 정밀 탐색** (약 40분)
-```
-목적: 상위 10개 후보 주변을 집중 탐색
-방법: 각 후보마다 15개 이웃 생성
-  - 연속 파라미터: 범위의 12% 표준편차로 교란
-  - 이산 파라미터: 15% 확률로 변경
-  - 총 160개 후보, 3라운드씩 대전 (2,880 매치)
-결과: 상위 5개 선별
-```
-
-**Stage 3: 최종 검증** (약 10분)
-```
-목적: 노이즈 제거 및 최종 확정
-방법: 상위 5개를 5라운드씩 재평가 (150 매치)
-결과: 챔피언 1개 선정
-```
-
-**총 매치 수**: 약 5,400 매치
-**총 소요 시간**: 1.5~2시간 (20 workers 병렬 처리)
-
-#### 최적화 대상 파라미터 (14개)
-
-`bt_optimizer.py`는 BT 구조는 고정하고 **파라미터만** 최적화합니다:
-
-**연속 파라미터 (8개)**:
-- `hard_deck_threshold`: Hard Deck 회피 진입 고도 (600~1500m)
-- `climb_target`: 상승 목표 고도 (1500~4000m)
-- `wez_ata_threshold`: 사격 허용 ATA 각도 (3~12°)
-- `threat_distance`: 위협 판단 거리 (400~1500m)
-- `close_combat_distance`: 근접전 전환 거리 (1500~4000m)
-- `offensive_press_distance`: 공세 압박 거리 (914~5000m) ⭐ **핵심**
-- `pnattack_kp`, `pnattack_kd`: PNAttack PD 게인
-
-**이산 파라미터 (6개)**:
-- `close_action`: 근접 기동 (LeadPursuit, Pursue, LagPursuit, PurePursuit)
-- `default_action`: 기본 기동 (Pursue, LeadPursuit, LagPursuit)
-- `defense_action`: 방어 기동 (BreakTurn, DefensiveManeuver 등)
-- `include_emergency_defense`: 비상 방어 블록 포함 여부
-- `include_offensive_press`: 공세 압박 분기 포함 여부 ⭐ **핵심**
-- `include_enemy_wez`: 적 WEZ 회피 분기 포함 여부
-
-#### 점수 계산 방식 (계층적 스코어링)
-
-최적화는 **승패가 1순위, HP 차이는 2순위**로 평가합니다:
-
-```python
-# 승리: 8.0 ~ 12.0점
-WIN  = 10.0 + (our_hp - their_hp) / 100.0 * 2.0
-
-# 무승부: -1.0 ~ 3.0점
-DRAW = 1.0 + (our_hp - their_hp) / 100.0 * 2.0
-
-# 패배: -7.0 ~ -3.0점
-LOSS = -5.0 + (our_hp - their_hp) / 100.0 * 2.0
-```
-
-**보장**: `최악의 승리(8.0) > 최고의 무승부(3.0) > 최고의 패배(-3.0)`
-
-이 방식으로 **ace vs aggressive 트레이드오프**를 해결했습니다:
-- 기존 v5: 12W / 6D / 0L (ace, aggressive에 무승부)
-- 최적화 v6: **17W / 1D / 0L** (+41.7% 승리 증가)
-
-#### 결과 파일 및 해석
-
-**주요 결과 파일**:
-- `logs/opt_results.json`: 최적화 결과 (상위 5개 후보 + 파라미터)
-- `logs/temp_bt/_temp_opt_XXXXX.yaml`: 임시 후보 BT 파일
-- `logs/opt_log.txt`: 전체 최적화 로그 (콘솔 출력 저장)
-- `logs/param_analysis_YYYYMMDD_HHMMSS.txt`: 파라미터 상관관계 분석
-
-**`opt_results.json` 구조**:
-```json
-{
-  "best_candidate": {
-    "score": 185.69,
-    "params": {
-      "offensive_press_distance": 3639,  // 핵심 발견!
-      "default_action": "LagPursuit",
-      "wez_ata_threshold": 3.0,
-      ...
-    },
-    "details": {
-      "ace": {"wins": 2, "draws": 1, "losses": 0},
-      "aggressive": {"wins": 3, "draws": 0, "losses": 0},
-      ...
-    }
-  },
-  "top_5": [...]
-}
-```
-
-**파라미터 분석 리포트**:
-- Spearman 상관계수: 각 파라미터와 성능의 상관관계
-- 이산 파라미터 평균 점수: 어떤 선택이 더 좋은지
-- 상위 25% vs 하위 25% 분포 비교
-
-#### 최적화된 BT 사용
-
-```bash
-# 1. 최적화 결과 확인
-cat logs/opt_results.json
-
-# 2. 최고 성능 후보 상세 테스트
-python tools/test_agent.py logs/temp_bt/_temp_opt_12345.yaml --all-opponents --rounds 10 --log-csv
-
-# 3. 특정 상대와 심층 분석
-python scripts/run_match.py --agent1 logs/temp_bt/_temp_opt_12345.yaml --agent2 ace --rounds 5 --log-csv
-
-# 4. 마음에 들면 복사하여 사용
-cp logs/temp_bt/_temp_opt_12345.yaml submissions/my_agent/my_agent.yaml
-
-# 5. 최종 검증
-python tools/bt_optimizer.py --validate --rounds 10
-```
-
-#### 로깅 기능 필요성
-
-**`bt_optimizer.py`에는 별도 로깅 옵션이 없습니다.** 이유:
-
-✅ **자동 로깅 내장**: 모든 결과가 `opt_results.json`과 `opt_log.txt`에 자동 저장
-✅ **대량 매치**: 5,400개 매치의 개별 로그는 비효율적 (수십 GB)
-✅ **요약 중심**: 파라미터 분석 리포트가 핵심 인사이트 제공
-✅ **사후 분석 가능**: 최적화 후 상위 후보를 `test_agent.py`나 `run_match.py`로 상세 분석
-
-**권장 워크플로우**:
-```bash
-# 1. 최적화 실행 (로그 자동 저장)
-python tools/bt_optimizer.py --candidates 200 --workers 20 > logs/opt_log.txt 2>&1
-
-# 2. 결과 확인
-cat logs/opt_results.json
-cat logs/param_analysis_*.txt
-
-# 3. 상위 후보 상세 분석 (이때 로깅 사용)
-python tools/test_agent.py logs/temp_bt/_temp_opt_BEST.yaml --all-opponents --rounds 10 --log-csv analysis
-```
-
-### 10.2 에이전트 일괄 테스트 (test_agent.py)
+### 10.1 에이전트 일괄 테스트 (test_agent.py)
 
 여러 상대와 자동으로 대전하여 통계를 수집합니다:
 
@@ -1469,7 +1300,7 @@ vs viper1      : 1W / 1D / 1L
 ✅ **통계 요약**: 상대별 전적 및 전체 승률 자동 계산
 ✅ **파이프라이닝 불필요**: 결과가 콘솔에 바로 출력되므로 `> output.txt` 필요 없음
 
-### 10.3 고급 개발 워크플로우
+### 10.2 고급 개발 워크플로우
 
 #### 워크플로우 1: 반복 개선
 
@@ -1487,23 +1318,7 @@ python tools/test_agent.py my_agent --all-opponents --rounds 5 --log-csv improve
 # baseline/ vs improved/ 폴더의 로그 비교
 ```
 
-#### 워크플로우 2: 자동 최적화 → 수동 미세조정
-
-```bash
-# 1. 자동 최적화로 좋은 시작점 찾기
-python tools/bt_optimizer.py --candidates 100 --workers 15
-
-# 2. 최고 후보 상세 분석
-python scripts/run_match.py --agent1 logs/temp_bt/_temp_opt_BEST.yaml --agent2 ace --log-csv
-
-# 3. 로그 분석 후 수동 조정
-# (YAML 파일 직접 편집)
-
-# 4. 최종 검증
-python tools/test_agent.py submissions/my_agent/my_agent.yaml --rounds 10
-```
-
-#### 워크플로우 3: 상대별 특화 전략
+#### 워크플로우 2: 상대별 특화 전략
 
 ```bash
 # 1. 모든 상대와 대전하며 상세 로그 수집 (한 번에!)
@@ -1519,7 +1334,7 @@ python tools/test_agent.py my_bt --all-opponents --rounds 5 --log-csv analysis
 python tools/test_agent.py my_agent --all-opponents --rounds 10 --log-csv
 ```
 
-### 10.4 성능 분석 팁
+### 10.3 성능 분석 팁
 
 **로그 데이터로 확인할 핵심 지표**:
 
