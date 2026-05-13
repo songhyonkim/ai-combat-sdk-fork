@@ -47,6 +47,8 @@
 
 ## 조건 노드 (Conditions)
 
+> 🔁 **Condition 평가 빈도** — 모든 표준 조건은 `BaseCondition`을 상속하며 runner의 20 Hz subtick 대상이다. 즉 매 env.step(50 ms)마다 한 번씩 `update()`가 호출되어 짧은 이벤트도 놓치지 않는다. BT tick(10 Hz)에서는 트리 traversal 중 추가로 평가된다. 자세한 내용은 GUIDE.md §12 참조.
+
 ### 거리 조건
 
 | 노드 | 기본값 | 파라미터 | 설명 |
@@ -335,6 +337,10 @@ class MyManeuver(TimedAction):
 | `execute(step, total)` | **필수** | 매 tick 실행. `step`은 1부터 시작 |
 | `on_start()` | 선택 | 기동 시작 시 1회 초기화 |
 | `on_finish(status)` | 선택 | 완료(`SUCCESS`) 또는 외부 중단(`INVALID`) 시 정리 |
+
+> 📐 **duration_steps는 5 Hz 기준 — 자동 환산**
+>
+> `duration_steps`는 `REFERENCE_TICK_HZ = 5.0` 기준으로 작성한다. 실제 BT tick rate(10 Hz)에 맞춰 베이스 클래스가 자동 비례 환산하므로, `duration_steps: 15`는 항상 **3초**를 의미한다. 시간 계층의 전체 그림은 GUIDE.md §12 참조.
 
 ---
 

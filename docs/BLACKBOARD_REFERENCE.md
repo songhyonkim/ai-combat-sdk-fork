@@ -2,6 +2,8 @@
 
 > **Single Source of Truth** — Blackboard `observation` 딕셔너리에 저장되는 모든 키의 이름, 단위, 범위, 부호 규약을 정의합니다.
 
+> 🔁 **갱신 빈도** — `observation` 딕셔너리와 `/` 접두사 전역 키는 **runner의 20 Hz subtick**에서 갱신된다 (매 env.step 직후). 즉 50 ms마다 새 값으로 갱신되며, BaseCondition을 상속한 모든 condition도 동일하게 20 Hz로 평가된다. BT 액션 노드만 10 Hz에서 평가된다. 전체 시간 계층은 GUIDE.md §12 참조.
+
 ---
 
 ## 단위 규약
@@ -112,7 +114,10 @@
 | `/MergeDistance_ft` | `float` | `IsMerged` |
 | `/Superior` | `bool` | `HasSuperior`, `NotSuperior` |
 | `/EnergyState` | `bool` | `EnergyHigh` |
+| `/TickRateHz` | `float` | `TimedAction` (자동 환산용, 일반적으로 직접 읽지 않음) |
 | `bfm_situation` | `BFMSituation` | `IsOffensive/Defensive/Neutral` |
+
+> **`/TickRateHz`** — `BehaviorTreeTask`가 매치 시작 시 BT tick rate(10 Hz)를 기록한다. `TimedAction` 베이스 클래스가 `duration_steps`를 5 Hz 기준에서 실제 tick rate로 자동 환산할 때 사용. 참가자가 직접 읽을 일은 거의 없음.
 
 ---
 

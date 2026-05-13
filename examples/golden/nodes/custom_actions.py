@@ -12,21 +12,9 @@ import time
 from pathlib import Path
 
 import py_trees
+from src.behavior_tree.nodes.actions import BaseAction
 
 logger = logging.getLogger(__name__)
-
-
-class BaseAction(py_trees.behaviour.Behaviour):
-    """Custom action base class"""
-
-    def __init__(self, name: str):
-        super().__init__(name)
-        self.blackboard = self.attach_blackboard_client()
-        self.blackboard.register_key(key="observation", access=py_trees.common.Access.READ)
-        self.blackboard.register_key(key="action", access=py_trees.common.Access.WRITE)
-
-    def set_action(self, delta_altitude_idx: int, delta_heading_idx: int, delta_velocity_idx: int):
-        self.blackboard.action = [delta_altitude_idx, delta_heading_idx, delta_velocity_idx]
 
 
 def _heading_from_tau(tau_deg: float, gain: float = 1.0) -> int:

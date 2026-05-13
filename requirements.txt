@@ -1,5 +1,5 @@
 # AI Combat SDK - 참가자 의존성
-# Python 3.12
+# Python 3.14
 
 # 시뮬레이션
 jsbsim>=1.2.3

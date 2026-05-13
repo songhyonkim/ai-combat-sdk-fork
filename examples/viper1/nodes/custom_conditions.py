@@ -6,30 +6,29 @@ Callsign: Viper1
 
 import logging
 import py_trees
+from src.behavior_tree.nodes.conditions import BaseCondition
 
 logger = logging.getLogger(__name__)
 
 
-class HighEnergyState(py_trees.behaviour.Behaviour):
+class HighEnergyState(BaseCondition):
     """고에너지 상태 확인
-    
-    에너지 = 고도 + 속도^2 / 20
+
+    specific_energy_ft (ft) = ego_altitude_ft + ego_vc_fts² / (2 × g_ft)
+    threshold 기본값 30000 ft ≈ 순항 에너지 + 여유
     """
-    
-    def __init__(self, name: str = "HighEnergyState", threshold: float = 12000):
+
+    def __init__(self, name: str = "HighEnergyState", threshold: float = 30000.0):
         super().__init__(name)
         self.threshold = threshold
         self.blackboard = self.attach_blackboard_client()
         self.blackboard.register_key(key="observation", access=py_trees.common.Access.READ)
-    
+
     def update(self) -> py_trees.common.Status:
         try:
             obs = self.blackboard.observation
-            velocity = obs.get("ego_vc", 200.0)
-            altitude = obs.get("ego_altitude", 5000.0)
-            
-            energy = altitude + (velocity ** 2) / 20
-            
+            energy = obs.get("specific_energy_ft", 22000.0)
+
             if energy > self.threshold:
                 return py_trees.common.Status.SUCCESS
             else:
@@ -39,23 +38,23 @@ class HighEnergyState(py_trees.behaviour.Behaviour):
             return py_trees.common.Status.FAILURE
 
 
-class LowEnergyState(py_trees.behaviour.Behaviour):
-    """저에너지 상태 확인"""
-    
-    def __init__(self, name: str = "LowEnergyState", threshold: float = 8000):
+class LowEnergyState(BaseCondition):
+    """저에너지 상태 확인
+
+    specific_energy_ft (ft) 기준. threshold 기본값 20000 ft ≈ 에너지 부족 판단선
+    """
+
+    def __init__(self, name: str = "LowEnergyState", threshold: float = 20000.0):
         super().__init__(name)
         self.threshold = threshold
         self.blackboard = self.attach_blackboard_client()
         self.blackboard.register_key(key="observation", access=py_trees.common.Access.READ)
-    
+
     def update(self) -> py_trees.common.Status:
         try:
             obs = self.blackboard.observation
-            velocity = obs.get("ego_vc", 200.0)
-            altitude = obs.get("ego_altitude", 5000.0)
-            
-            energy = altitude + (velocity ** 2) / 20
-            
+            energy = obs.get("specific_energy_ft", 22000.0)
+
             if energy < self.threshold:
                 return py_trees.common.Status.SUCCESS
             else:
@@ -65,39 +64,39 @@ class LowEnergyState(py_trees.behaviour.Behaviour):
             return py_trees.common.Status.FAILURE
 
 
-class OptimalAttackPosition(py_trees.behaviour.Behaviour):
+class OptimalAttackPosition(BaseCondition):
     """최적 공격 위치 확인
-    
+
     조건:
-    - 거리: 800m ~ 2500m (WEZ 범위)
+    - 거리: 2625 ft ~ 8202 ft (800 m ~ 2500 m, WEZ 범위)
     - ATA: < 30도 (조준 가능)
-    - 고도 우위: > 0m
+    - 고도 우위: > 0 ft
     """
-    
+
     def __init__(self, name: str = "OptimalAttackPosition"):
         super().__init__(name)
         self.blackboard = self.attach_blackboard_client()
         self.blackboard.register_key(key="observation", access=py_trees.common.Access.READ)
-    
+
     def update(self) -> py_trees.common.Status:
         try:
             obs = self.blackboard.observation
-            distance = obs.get("distance", 10000.0)
-            ata_deg = obs.get("ata_deg", 1.0) * 180.0
-            alt_gap = obs.get("alt_gap", 0.0)
-            
-            # 최적 거리
-            if distance < 800 or distance > 2500:
+            distance_ft = obs.get("distance_ft", 10000.0)
+            ata_deg = obs.get("ata_deg", 180.0)
+            alt_gap_ft = obs.get("alt_gap_ft", 0.0)
+
+            # 최적 거리 (ft)
+            if distance_ft < 2625 or distance_ft > 8202:
                 return py_trees.common.Status.FAILURE
-            
+
             # 조준 가능 각도
             if abs(ata_deg) > 30:
                 return py_trees.common.Status.FAILURE
-            
+
             # 고도 우위
-            if alt_gap < 0:
+            if alt_gap_ft < 0:
                 return py_trees.common.Status.FAILURE
-            
+
             return py_trees.common.Status.SUCCESS
         except (KeyError, AttributeError, TypeError) as e:
             logger.warning(f"OptimalAttackPosition 실행 실패: {e}")

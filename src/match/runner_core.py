@@ -7,19 +7,20 @@ Match Core - 매치 실행 핵심 로직 (보호 대상)
 from pathlib import Path
 from typing import Optional, Callable, Dict
 import sys
+import time
 import numpy as np
 from datetime import datetime, timezone, timedelta
 
 from src.simulation.envs.JSBSim.envs import SingleCombatEnv
 from src.simulation.envs.JSBSim.core.catalog import JsbsimCatalog as _prp
-from src.simulation.envs.JSBSim.utils.utils import LLA2NEU
 from ..behavior_tree.task import BehaviorTreeTask
 from .result import MatchResult
 from src.control.health_manager import HealthGauge
-from ..control.combat_geometry import CombatGeometry
 from .judge import MatchJudge, VictoryCondition
-from ..utils.units import meters_to_feet, ms_to_knots
+from ..utils.units import meters_to_feet
 from .wez_engine import calculate_wez_damage
+from .acmi_formatter import build_full_frame
+from .replay_writer import ReplayWriter
 
 KST = timezone(timedelta(hours=9))
 
@@ -45,6 +46,8 @@ class MatchCore:
         tree1_name: Optional[str] = None,
         tree2_name: Optional[str] = None,
         step_hook: Optional[Callable] = None,
+        realtime_server=None,
+        realtime_pacing: bool = False,
     ):
         """
         Args:
@@ -57,6 +60,8 @@ class MatchCore:
             step_hook: 매 스텝 후 runner.py에서 호출되는 내부 훅
                 시그니처: hook(step, task1, task2, health1, health2,
                               action1, action2, reward1, reward2, debug_info, env)
+            realtime_server: TacviewRealtimeServer 인스턴스 (None이면 실시간 중계 비활성)
+            realtime_pacing: True이면 실시간 페이싱 적용 (dt=0.2s 간격)
         """
         self.tree1_file = tree1_file
         self.tree2_file = tree2_file
@@ -65,6 +70,8 @@ class MatchCore:
         self.tree1_name = tree1_name or Path(tree1_file).stem
         self.tree2_name = tree2_name or Path(tree2_file).stem
         self.step_hook = step_hook
+        self.realtime_server = realtime_server
+        self.realtime_pacing = realtime_pacing
 
         self.task1: Optional[BehaviorTreeTask] = None
         self.task2: Optional[BehaviorTreeTask] = None
@@ -87,6 +94,7 @@ class MatchCore:
         env.tree1_name = tree1_name
         env.tree2_name = tree2_name
 
+        env.config.max_steps = self.max_steps
         self.task1 = BehaviorTreeTask(env.config, tree_file=self.tree1_file)
         self.task2 = BehaviorTreeTask(env.config, tree_file=self.tree2_file)
         task1 = self.task1
@@ -109,6 +117,17 @@ class MatchCore:
 
         obs = env.reset()
 
+        # 실시간 텔레메트리 매치 시작
+        if self.realtime_server is not None:
+            self.realtime_server.start_match(
+                title=f"BT Match: {tree1_name} vs {tree2_name}",
+                blue_id=env.ego_ids[0],
+                red_id=env.enm_ids[0],
+                blue_name=tree1_name,
+                red_name=tree2_name,
+            )
+
+        replay_writer = None
         if replay_path:
             replay_path = Path(replay_path)
             if replay_path.exists():
@@ -126,20 +145,44 @@ class MatchCore:
                 enm_uid = env.enm_ids[0]
                 f.write(f"{ego_uid},Type=Air+FixedWing,Name=F-16,Pilot={tree1_name},Color=Blue\n")
                 f.write(f"{enm_uid},Type=Air+FixedWing,Name=F-16,Pilot={tree2_name},Color=Red\n")
+            env._create_records = True  # env.render() 헤더 덮어쓰기 방지
+            replay_writer = ReplayWriter(str(replay_path))
+            replay_writer.start()
 
+        _replay_prev_nodes: Dict[str, str] = {}
         total_reward_1 = 0.0
         total_reward_2 = 0.0
         step_count = 0
         done = False
         winner = None
         victory_condition = None
+        next_step_time = time.perf_counter() if self.realtime_pacing else 0
+
+        # BT 10 Hz 분리: env.step rate(20 Hz)와 무관하게 BT 결정은 100 ms 간격.
+        # env.time_interval에서 동적 산출 → 향후 step rate 변경에도 자동 정합.
+        # RNN(저수준 정책) 5 Hz 캐시는 HierarchicalSingleCombatTask.normalize_action에서 처리.
+        BT_TICK_EVERY = max(1, round(0.1 / float(env.time_interval)))
+        bt_tick_counter = BT_TICK_EVERY  # 첫 스텝에서 즉시 BT tick 실행
+        action1 = None
+        action2 = None
 
         while not done and step_count < self.max_steps:
-            action1 = task1.get_high_level_action(env, env.ego_ids[0])
-            action2 = task2.get_high_level_action(env, env.enm_ids[0])
+            if bt_tick_counter >= BT_TICK_EVERY:
+                bt_tick_counter = 0
+                action1 = task1.get_high_level_action(env, env.ego_ids[0])
+                action2 = task2.get_high_level_action(env, env.enm_ids[0])
+            bt_tick_counter += 1
 
             action = np.array([action1, action2])
             obs, reward, dones, info = env.step(action)
+
+            # 20 Hz condition subtick: blackboard 갱신(/Distance_ft, PS, BFM 등) +
+            # BaseCondition.update() 호출. 액션 노드와 TimedAction 카운터는 영향 없음.
+            try:
+                task1.tick_conditions(env, env.ego_ids[0])
+                task2.tick_conditions(env, env.enm_ids[0])
+            except Exception as _tc_err:
+                print(f"[MatchCore] tick_conditions error step={step_count}: {_tc_err}")
 
             control_inputs = {}
             prp = _prp
@@ -169,15 +212,13 @@ class MatchCore:
             if damage1 > 0:
                 health1.take_damage(damage1, step_count)
                 health2.deal_damage(damage1)
-                if replay_path:
-                    with open(replay_path, "a", encoding='utf-8-sig') as f:
-                        f.write(f"0,Event=Bookmark|{env.enm_ids[0]}|[Red] HIT! {damage1:.2f} HP\n")
+                if replay_writer:
+                    replay_writer.write(f"0,Event=Bookmark|{env.enm_ids[0]}|[Red] HIT! {damage1:.2f} HP\n")
             if damage2 > 0:
                 health2.take_damage(damage2, step_count)
                 health1.deal_damage(damage2)
-                if replay_path:
-                    with open(replay_path, "a", encoding='utf-8-sig') as f:
-                        f.write(f"0,Event=Bookmark|{env.ego_ids[0]}|[Blue] HIT! {damage2:.2f} HP\n")
+                if replay_writer:
+                    replay_writer.write(f"0,Event=Bookmark|{env.ego_ids[0]}|[Blue] HIT! {damage2:.2f} HP\n")
 
             if not health1.is_alive() and not health2.is_alive():
                 winner = "draw"
@@ -206,10 +247,9 @@ class MatchCore:
                         winner = "tree1" if _j_winner == "agent1" else "tree2"
                         victory_condition = _j_cond
                         done = True
-                        if replay_path:
+                        if replay_writer:
                             _viol_uid = env.enm_ids[0] if winner == "tree1" else env.ego_ids[0]
-                            with open(replay_path, 'a') as _rf:
-                                _rf.write(f"0,Event=Bookmark|{_viol_uid}|[Hard Deck] 고도 위반 — {winner} 승리\n")
+                            replay_writer.write(f"0,Event=Bookmark|{_viol_uid}|[Hard Deck] 고도 위반 — {winner} 승리\n")
                 except (AttributeError, KeyError, ValueError, TypeError):
                     pass
 
@@ -275,94 +315,62 @@ class MatchCore:
                 except Exception as _hook_err:
                     print(f"[MatchCore] step_hook error step={step_count}: {_hook_err}")
 
-            if replay_path:
-                env.render(mode="txt", filepath=str(replay_path))
+            # ── BT 노드 정보 수집 (파일 + 실시간 공용) ──
+            _bt_info: Dict[str, dict] = {}
+            for _aid, _tsk, _tname, _clr in [
+                (env.ego_ids[0], task1, tree1_name, 'Blue'),
+                (env.enm_ids[0], task2, tree2_name, 'Red'),
+            ]:
+                _node_info: dict = {
+                    'color': _clr, 'tree_name': _tname,
+                    'active_node': '', 'node_path': '',
+                }
+                if hasattr(_tsk, 'get_last_active_nodes'):
+                    _active = _tsk.get_last_active_nodes()
+                    if _active:
+                        _an = [n for n, s in _active if s == 'SUCCESS']
+                        if _an:
+                            _node_info['active_node'] = _an[-1]
+                            _node_info['node_path'] = ">".join([n for n, s in _active])
+                _bt_info[_aid] = _node_info
+
+            _health_map = {
+                env.ego_ids[0]: health1.current_health,
+                env.enm_ids[0]: health2.current_health,
+            }
+            _reward_map = {env.ego_ids[0]: reward1, env.enm_ids[0]: reward2}
+
+            # ── 프레임 공통 생성 (리플레이 & 실시간 텔레메트리) ──
+            _frame = None
+            if replay_writer or self.realtime_server is not None:
                 try:
-                    with open(replay_path, 'a', encoding='utf-8-sig') as f:
-                        for i, agent_id in enumerate([env.ego_ids[0], env.enm_ids[0]]):
-                            agent = env.agents[agent_id]
-                            enemy = agent.enemies[0] if agent.enemies else None
-                            if enemy is None:
-                                continue
-                            ego_obs = np.array(agent.get_property_values(env.task.state_var))
-                            enm_obs = np.array(enemy.get_property_values(env.task.state_var))
-                            if len(ego_obs) < 12 or len(enm_obs) < 12:
-                                continue
-                            ego_ned = LLA2NEU(*ego_obs[:3], env.center_lon, env.center_lat, env.center_alt)
-                            enm_ned = LLA2NEU(*enm_obs[:3], env.center_lon, env.center_lat, env.center_alt)
-                            ego_vel_neu = agent.get_velocity()
-                            enm_vel_neu = enemy.get_velocity()
-                            ego_vel = np.array([ego_vel_neu[0], ego_vel_neu[1], -ego_vel_neu[2]])
-                            enm_vel = np.array([enm_vel_neu[0], enm_vel_neu[1], -enm_vel_neu[2]])
-                            ego_roll = agent.get_rpy()[0]
-                            combat_geo = CombatGeometry(ego_ned, enm_ned, ego_vel, enm_vel, ego_roll)
-                            params = combat_geo.get_all_params()
-                            agent_reward = 0.0
-                            if isinstance(reward, np.ndarray):
-                                if reward.ndim == 2 and reward.shape[0] > i:
-                                    agent_reward = reward[i, 0]
-                                elif reward.ndim == 1 and len(reward) > i:
-                                    agent_reward = reward[i]
-                            if control_inputs and agent_id in control_inputs:
-                                cmd_values = control_inputs[agent_id]
-                                aileron = cmd_values[0] if cmd_values[0] is not None else 0.0
-                                elevator = cmd_values[1] if cmd_values[1] is not None else 0.0
-                                rudder = cmd_values[2] if cmd_values[2] is not None else 0.0
-                                throttle = cmd_values[3] if cmd_values[3] is not None else 0.5
-                            else:
-                                aileron = elevator = rudder = 0.0
-                                throttle = 0.5
-                            try:
-                                roll_pos = agent.get_property_value(prp.fcs_left_aileron_pos_norm)
-                                pitch_pos = agent.get_property_value(prp.fcs_elevator_pos_norm)
-                                yaw_pos = agent.get_property_value(prp.fcs_rudder_pos_norm)
-                                if roll_pos is None or pitch_pos is None or yaw_pos is None:
-                                    roll_pos = pitch_pos = yaw_pos = 0.0
-                            except Exception:
-                                roll_pos = pitch_pos = yaw_pos = 0.0
-                            uid = agent.uid
-                            f.write(f"{uid},RollControlInput={aileron:.2f},PitchControlInput={elevator:.2f},YawControlInput={rudder:.2f},Throttle={throttle:.2f}\n")
-                            f.write(f"{uid},RollControlPosition={roll_pos:.4f},PitchControlPosition={pitch_pos:.4f},YawControlPosition={yaw_pos:.4f}\n")
-                            f.write(f"{uid},StepsElapsed={step_count}/{self.max_steps}\n")
-                            wez_debug = self._last_wez_debug
-                            if wez_debug and 'distance' in wez_debug:
-                                wez_ata = wez_debug['ata1'] if i == 0 else wez_debug['ata2']
-                                distance_ft = meters_to_feet(wez_debug['distance'])
-                                f.write(f"{uid},Distance={distance_ft:.2f}\n")
-                                f.write(f"{uid},ATA={wez_ata:.2f}\n")
-                            else:
-                                distance_ft = meters_to_feet(params['distance'])
-                                f.write(f"{uid},Distance={distance_ft:.2f}\n")
-                                f.write(f"{uid},ATA={params['ata_deg']:.2f}\n")
-                            f.write(f"{uid},AA={params['aa_deg']:.2f}\n")
-                            f.write(f"{uid},HCA={params['hca_deg']:.2f}\n")
-                            f.write(f"{uid},TAU={params['tau_deg']:.2f}\n")
-                            f.write(f"{uid},ClosureRate={ms_to_knots(params['closure_rate']):.2f}\n")
-                            f.write(f"{uid},Reward={agent_reward:.4f}\n")
-                            current_health = health1.current_health if i == 0 else health2.current_health
-                            f.write(f"{uid},Health={current_health:.1f}\n")
-                            if wez_debug and 'in_wez1' in wez_debug:
-                                in_wez = wez_debug['in_wez1'] if i == 0 else wez_debug['in_wez2']
-                                f.write(f"{uid},InWEZ={'True' if in_wez else 'False'}\n")
-                            task = task1 if i == 0 else task2
-                            tree_name_i = tree1_name if i == 0 else tree2_name
-                            color = "Blue" if i == 0 else "Red"
-                            if hasattr(task, 'get_last_active_nodes'):
-                                active_nodes = task.get_last_active_nodes()
-                                if active_nodes:
-                                    action_nodes = [n for n, s in active_nodes if s == 'SUCCESS']
-                                    if action_nodes:
-                                        active_action = action_nodes[-1]
-                                        f.write(f"{uid},ActiveNode={active_action}\n")
-                                        path = ">".join([n for n, s in active_nodes])
-                                        f.write(f"{uid},NodePath={path}\n")
-                                        prev_node_key = f"_prev_node_{uid}"
-                                        prev_node = getattr(self, prev_node_key, None)
-                                        f.write(f"{uid},Label=[{color}] {active_action}\n")
-                                        if prev_node != active_action:
-                                            setattr(self, prev_node_key, active_action)
-                                            f.write(f"0,Event=Message|{uid}|[{color}] {tree_name_i}: {active_action}\n")
-                                            f.write(f"0,Event=Debug|{uid}|Path: {path}\n")
+                    _frame = build_full_frame(
+                        env=env,
+                        sim_time=step_count * env.time_interval,
+                        control_inputs=control_inputs,
+                        wez_debug=self._last_wez_debug,
+                        health_map=_health_map,
+                        reward_map=_reward_map,
+                        bt_info=_bt_info,
+                        step_count=step_count,
+                        max_steps=self.max_steps,
+                        use_extended_log=True,
+                        prev_node_map=_replay_prev_nodes,
+                    )
+                except Exception:
+                    pass
+
+            # ── Tacview 리플레이 기록 (비동기, build_full_frame 사용) ──
+            if replay_writer and _frame:
+                try:
+                    replay_writer.write(_frame)
+                except Exception:
+                    pass
+
+            # ── 실시간 텔레메트리 프레임 전송 ──
+            if self.realtime_server is not None and _frame:
+                try:
+                    self.realtime_server.send_frame(_frame)
                 except Exception:
                     pass
 
@@ -375,7 +383,23 @@ class MatchCore:
             if verbose and step_count % 50 == 0:
                 print(f"  Step {step_count}: reward={reward}")
 
+            # 실시간 페이싱
+            if self.realtime_pacing:
+                next_step_time += env.time_interval
+                sleep_time = next_step_time - time.perf_counter()
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+                elif sleep_time < -0.05:
+                    next_step_time = time.perf_counter()
+
+        if replay_writer:
+            replay_writer.stop()
         env.close()
+
+        # 실시간 텔레메트리 매치 종료
+        if self.realtime_server is not None:
+            winner_display = tree1_name if winner == "tree1" else tree2_name if winner == "tree2" else "무승부"
+            self.realtime_server.end_match(winner=winner_display)
 
         if winner is None:
             if health1.current_health > health2.current_health:

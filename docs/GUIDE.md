@@ -1016,41 +1016,55 @@ class CustomImmelmann(TimedAction):
 | `on_start()` | 선택 | 기동 시작 시 1회 초기화 |
 | `on_finish(status)` | 선택 | `SUCCESS`(완료) 또는 `INVALID`(외부 중단) 시 정리 |
 
+> 📐 **duration_steps 단위 — 자동 환산됨**
+>
+> `duration_steps`는 **5 Hz 기준**(REFERENCE_TICK_HZ)으로 작성한다. 실제 BT tick rate(10 Hz)에 따라 베이스 클래스가 자동으로 비례 환산하므로, `duration_steps: 15`는 어느 tick rate에서도 동일한 **실 시간 3초**를 의미한다. 즉:
+> - `duration_steps: 5` → 1초
+> - `duration_steps: 15` → 3초
+> - `duration_steps: 25` → 5초
+>
+> 따라서 기존에 작성된 YAML / 커스텀 노드는 코드 변경 없이 그대로 동작한다. 시간 계층의 전체 그림은 §12.1 참조.
+
 ### 9.3 커스텀 조건 노드 ⭐ **신규**
+
+**커스텀 condition은 반드시 `BaseCondition`을 상속한다.** 이렇게 해야 runner의 20 Hz subtick(매 env.step 직후) 대상으로 자동 등록되어 짧은 이벤트를 놓치지 않는다. 자세한 활용 예시는 §12.3 참조.
 
 ```python
 import py_trees
+from src.behavior_tree.nodes.conditions import BaseCondition
 
-class OptimalAttackPosition(py_trees.behaviour.Behaviour):
-    """최적 공격 위치 확인
-    
+class OptimalAttackPosition(BaseCondition):
+    """최적 공격 위치 확인 (stateless 조건)
+
     조건:
     - 거리: 800m ~ 2500m
     - ATA: < 30도
     - 고도 우위: > 0m
     """
-    
+
     def __init__(self, name="OptimalAttackPosition"):
         super().__init__(name)
         self.blackboard = self.attach_blackboard_client()
         self.blackboard.register_key(key="observation", access=py_trees.common.Access.READ)
-    
+
     def update(self) -> py_trees.common.Status:
         try:
             obs = self.blackboard.observation
             distance = obs.get("distance_ft", 10000.0)  # ft
             ata_deg = obs.get("ata_deg", 180.0)  # 실제 도(°) 단위
             alt_gap_ft = obs.get("alt_gap_ft", 0.0)  # ft
-            
+
             # 조건 검사
             if 2625 < distance < 8202 and abs(ata_deg) < 30 and alt_gap_ft > 0:
                 return py_trees.common.Status.SUCCESS
             else:
                 return py_trees.common.Status.FAILURE
-                
+
         except Exception as e:
             return py_trees.common.Status.FAILURE
 ```
+
+> 💡 **stateful condition(edge detection / debounce / hysteresis)을 만들고 싶다면** — `update()` 안에 인스턴스 변수로 직전 값/카운터를 보관한다. runner가 20 Hz로 `update()`를 호출하므로 50 ms 간격 이벤트도 포착 가능. 완전한 예시(WEZ 진입 edge, ATA 통과 카운터)는 §12.3 참조.
 
 ### 9.4 PD 제어기 패턴 (Golden BT 핵심)
 
@@ -1794,6 +1808,128 @@ v6: 종합 최적화 (수작업 한계)                  → 17W/1D/0L
 
 ---
 
+## 12. 실행 모델 (Execution Model)
+
+이 섹션은 매치 중 BT/RNN/env.step/로깅이 어느 주기로 돌아가는지, CSV/ACMI 행에 들어가는 값이 어느 빈도로 갱신되는지를 정확히 설명한다. **BT를 튜닝하거나 로그를 분석할 때 반드시 이해해야 한다**.
+
+### 12.1 시간 계층
+
+```
+JSBSim 물리       : 60 Hz   (sim_freq=60, dt=1/60s)
+env.step          : 20 Hz   (agent_interaction_steps=3, dt=0.05s)
+Condition subtick : 20 Hz   (러너가 매 env.step 직후 BaseCondition.update() 호출)
+BT tick (action)  : 10 Hz   (러너 내부 캐시: 2 env.step당 1번 BT 결정)
+RNN 추론          :  5 Hz   (저수준 정책 캐시: 4 env.step당 1번 forward)
+WEZ 콘            : 12°
+TimedAction       : 5 Hz 기준 YAML → 실 BT tick rate로 자동 환산 (§9.2)
+```
+
+각 계층의 의미:
+
+| 계층 | 빈도 | 무엇이 일어나는가 |
+|------|------|------------------|
+| **물리** | 60 Hz | JSBSim이 항공기 상태(위치/자세/속도/가속도)를 적분 |
+| **env.step** | 20 Hz | 행동을 환경에 전달하고 3 sim step 만큼 물리 진행. 보상/종료 판정 |
+| **condition subtick** | 20 Hz | observation 갱신 + 트리의 모든 `BaseCondition.update()` 호출 (액션은 제외) |
+| **BT tick** | 10 Hz | `tree.tick_once()` 전체 실행 → action 노드까지 평가 → 새 고수준 명령 출력 |
+| **RNN 추론** | 5 Hz | BaselineActor(GRU+MLP)가 고수준 명령 → 저수준 4채널 제어로 변환. 사이는 ZOH |
+
+핵심 invariants:
+- 모든 빈도는 `env.time_interval`에서 자동 산출됨 — `agent_interaction_steps` 값을 바꾸면 BT/RNN tick 비율은 동일하게 유지됨
+- BT 한 번의 결정은 다음 RNN tick(최대 200 ms 후)에 반영됨. 결정-제어 latency = 100~200 ms
+- RNN은 **재학습 없음**: 학습 분포(0.2 s 결정 주기) 보존을 위해 항상 5 Hz로 throttle
+
+### 12.2 CSV / ACMI 갱신 빈도
+
+CSV와 ACMI는 **둘 다 매 env.step마다 1행/1프레임**으로 기록된다. 즉 **20 Hz**. 단 컬럼별로 *값이 실제 갱신되는 빈도*는 출처에 따라 다르다.
+
+매치 길이가 300 s일 때 CSV 행 수: `300 × 20 × 2 agents = 12,000 행`.
+
+| 출처 | 값 갱신 빈도 | CSV 컬럼 / ACMI 필드 |
+|------|-------------|---------------------|
+| JSBSim 물리 상태 (env.step 내부 3 sim step의 마지막 값) | 20 Hz | 위치(lat/lon/alt), 자세(roll/pitch/yaw), `ego_vc_kts`, `ego_vx_kts`, `ego_vy_kts`, `ego_vz_kts` |
+| CombatGeometry 계산 (env.step마다) | 20 Hz | `distance_ft`, `ata_deg`, `aa_deg`, `hca_deg`, `tau_deg`, `relative_bearing_deg`, `closure_rate_kts`, `turn_rate_degs` |
+| BT blackboard services (tick_conditions에서 갱신) | 20 Hz | `/Distance_ft`, `/CurrentRoll_deg`, `/ClosureRate_kts`, `/In39Line`, `ps_fts`, `bfm_situation` |
+| BT 액션 출력 (BT tick에서만 갱신) | **10 Hz** (2행마다 같은 값 반복) | `action_altitude`, `action_heading`, `action_velocity` |
+| 저수준 제어 (RNN 출력, RNN tick에서만 갱신) | **5 Hz** (4행마다 같은 값 반복) | `aileron`, `elevator`, `rudder`, `throttle`, ACMI의 `RollControlInput` 등 |
+| 활성 BT 노드 (BT tick에서만 갱신) | **10 Hz** | `active_node`, `active_nodes_path` |
+| WEZ 판정 / 데미지 / HP | 20 Hz | `in_wez`, `enm_in_wez`, `ego_health`, `enm_health`, `ego_damage_dealt`, `enm_damage_dealt` |
+| 보상 | 20 Hz | `reward` |
+
+분석 시 필터링 팁:
+```python
+import pandas as pd
+df = pd.read_csv('logs/match.csv')
+my = df[df['agent_id'] == 'A0100']
+
+# BT 결정 시점만 (10 Hz): action 값이 새로 갱신된 행만 추리고 싶을 때
+bt_ticks = my[my['step'] % 2 == 0]
+
+# RNN 추론 시점만 (5 Hz): 저수준 제어가 새로 갱신된 행만
+rnn_ticks = my[my['step'] % 4 == 0]
+
+# 액션 노드 전환 시점만
+node_changes = my[my['active_node'] != my['active_node'].shift()]
+```
+
+CSV 크기가 부담스러우면 매치 실행 스크립트에서 다운샘플링이 가능하지만, 일반적으로 20 Hz 그대로 두는 것을 권장한다 — PS 차분, BFM 전환 검출, 짧은 WEZ 통과 이벤트 분석에 유리.
+
+### 12.3 20 Hz Condition Subtick 활용 (참가자 사용 패턴)
+
+기본적으로 conditional 노드는 BT tick(10 Hz)에서 평가되지만, runner가 매 env.step마다(20 Hz) 트리에 포함된 `BaseCondition` 인스턴스의 `update()`를 **추가로** 한 번 더 호출한다. 이를 활용하면 짧은 이벤트(예: 빠른 WEZ 통과, 순간적 ATA 임계 통과)를 놓치지 않고 감지하는 stateful condition을 작성할 수 있다.
+
+핵심 규칙:
+1. 커스텀 condition은 `BaseCondition`을 상속해야 한다 (`from src.behavior_tree.nodes.conditions import BaseCondition`)
+2. `update()` 내부에서 stateful 로직(이전 값 기억, 카운터, 디바운스)을 구현
+3. 액션 선택은 여전히 10 Hz에서만 일어남 — condition이 `SUCCESS`를 자주 반환해도 액션은 다음 BT tick까지 보류됨
+4. 부수효과(blackboard 쓰기, 인스턴스 변수 갱신)는 20 Hz로 발생
+
+예시: WEZ 진입 edge detection (50 ms 정밀)
+```python
+from src.behavior_tree.nodes.conditions import BaseCondition
+import py_trees
+
+class WEZEntryEdge(BaseCondition):
+    """WEZ 진입 순간만 SUCCESS — 20 Hz로 평가되므로 짧은 통과도 포착."""
+    def __init__(self, name="WEZEntryEdge"):
+        super().__init__(name)
+        self.blackboard = self.attach_blackboard_client()
+        self.blackboard.register_key(key="observation", access=py_trees.common.Access.READ)
+        self._prev_in_wez = False
+
+    def update(self):
+        in_wez = self.blackboard.observation.get("in_wez", False)
+        edge = in_wez and not self._prev_in_wez
+        self._prev_in_wez = in_wez
+        return py_trees.common.Status.SUCCESS if edge else py_trees.common.Status.FAILURE
+```
+
+예시: ATA 임계 통과 횟수 카운터
+```python
+class ATABelowThresholdCounter(BaseCondition):
+    """ATA가 임계값 아래로 통과한 횟수가 N 이상이면 SUCCESS (20 Hz 정밀)."""
+    def __init__(self, name="ATABelowThresholdCounter", threshold_deg=15.0, min_count=3):
+        super().__init__(name)
+        self.blackboard = self.attach_blackboard_client()
+        self.blackboard.register_key(key="observation", access=py_trees.common.Access.READ)
+        self.threshold_deg = threshold_deg
+        self.min_count = min_count
+        self._prev_above = True
+        self._count = 0
+
+    def update(self):
+        ata = self.blackboard.observation.get("ata_deg", 180.0)
+        below = ata < self.threshold_deg
+        if below and self._prev_above:
+            self._count += 1
+        self._prev_above = not below
+        return py_trees.common.Status.SUCCESS if self._count >= self.min_count else py_trees.common.Status.FAILURE
+```
+
+> ⚠️ 주의 — `update()`가 무거우면 20 Hz로 호출되므로 매치 성능에 영향. 무거운 계산은 BT tick 노드에서 수행하고, condition은 가벼운 stateful 로직만 두는 것을 권장.
+
+---
+
 ## 부록 A: 주요 파라미터 요약
 
 ### 핵심 규칙 요약
@@ -1801,7 +1937,7 @@ v6: 종합 최적화 (수작업 한계)                  → 17W/1D/0L
 | 항목 | 값 | 비고 |
 |------|-----|------|
 | **Hard Deck** | 1000ft (304.8m) | `HARD_DECK_M = feet_to_meters(1000)` |
-| **최대 스텝** | 1,500 스텝 = 300초 | `tournament_config.yaml` max_steps: 1500 |
+| **최대 스텝** | 6,000 스텝 = 300초 | `bt_vs_bt.yaml` max_steps: 6000 (env.step 20 Hz × 300 s) |
 | **WEZ 거리** | 500~3000ft | 152~914m |
 | **WEZ 각도** | ATA < 12° | 실제 데미지 발생 조건 (ATA 0°에 가까울수록 데미지 증가) |
 | **기본 DPS** | 25 HP/s | 거리·각도 계수 적용 |
